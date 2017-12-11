@@ -2,6 +2,7 @@
 import fcntl
 import logging
 import os
+import sys
 import tempfile
 import time
 
@@ -40,8 +41,12 @@ class FLock(object):
 @argh.arg('--conf', default='~/.youtube-dl-channel-bot.conf')
 @argh.arg('--hook', default='~/.youtube-dl-channel-bot.hook')
 @argh.arg('--lock', default='~/.youtube-dl-channel-bot.lock')
+@argh.arg('--filename-template', default='%(title)s-%(id)s.%(ext)s')
 def main(*youtube_dl_args, **kwargs):
-	log, conf, hook, lock = [kwargs[k] for k in ('log', 'conf', 'hook', 'lock')]
+	log, conf, hook, lock, filename_template = [
+		kwargs[k] for k in ('log', 'conf', 'hook', 'lock', 'filename_template')
+	]
+	conf, hook, lock = [os.path.expanduser(s) for s in (conf, hook, lock)]
 	logging.basicConfig(level=log.upper())
 	logging.info("Executing with youtube-dl args: {!r}".format(youtube_dl_args))
 	with FLock(lock):
@@ -52,8 +57,8 @@ def main(*youtube_dl_args, **kwargs):
 		update_times = {}
 		for url, path, timestamp in channels:
 			update_times[url, path] = time.time()
-			logging.info("Checking for new videos from {!r} after {!r}".format(url), timestamp)
-			new_files += check_channel(url, path, timestamp, youtube_dl_args)
+			logging.info("Checking for new videos from {!r} after {!r}".format(url, timestamp))
+			new_files += check_channel(url, path, timestamp, youtube_dl_args, filename_template)
 		logging.info("Got {} new files".format(len(new_files)))
 		update_conf(conf, update_times)
 		if os.access(hook, os.X_OK):
@@ -92,7 +97,7 @@ def _parse_conf(path):
 					"Bad line {} in conf file: Bad timestamp {!r}".format(i+1, timestamp)
 				)
 			timestamp = int(timestamp)
-		items.append(url, path, timestamp)
+		items.append((url, path, timestamp))
 	return items
 
 
@@ -111,7 +116,7 @@ def update_conf(path, update_times):
 			continue
 		url, path, old_ts = item
 		new_ts = update_times.get((url, path), old_ts)
-		new_conf.append('\t'.join(new_ts, url, path))
+		new_conf.append('\t'.join(str(int(new_ts)), url, path))
 	# note we use a temp path so we can use os.rename for atomic switch (no partial writes on crash)
 	tmp_path = "{}.tmp".format(path)
 	with open(tmp_path, 'w') as f:
@@ -119,15 +124,23 @@ def update_conf(path, update_times):
 	os.rename(tmp_path, path)
 
 
-def check_channel(url, path, timestamp, youtube_dl_args):
+def check_channel(url, path, timestamp, youtube_dl_args, filename_template):
 	"""For given channel url, checks for videos posted since timestamp, and if so downloads them to
 	given path. Adds any given youtube-dl args as extra args. Returns a list of new files."""
 	# In order to get a list of downloaded files, we resort to a hack:
 	# we download to a temp dir first, then rename.
-	timestr = time.strftime('%Y%m%d', time.gmtime(timestamp))
+	if timestamp is None:
+		time_args = []
+	else:
+		timestr = time.strftime('%Y%m%d', time.gmtime(timestamp))
+		time_args = ['--dateafter', timestr]
 	tempdir = tempfile.mkdtemp(prefix='youtube-dl-channel-bot-', suffix='.tmp.d', dir=path)
 	try:
-		cmd(['youtube-dl'] + youtube_dl_args + ['--dateafter', timestr, '--', url])
+		output_template = '{}/{}'.format(tempdir, filename_template)
+		cmd(
+			['youtube-dl'] + list(youtube_dl_args) + time_args + ['-o', output_template, '--', url],
+			stdout=sys.stdout,
+		)
 		# we only want to report new files if they weren't already downloaded
 		# (this can happen in a few edge cases)
 		new_files = set(os.listdir(tempdir)) - set(os.listdir(path))
