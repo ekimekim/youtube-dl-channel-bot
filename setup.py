@@ -8,6 +8,7 @@ setup(
 	description='Bot for downloading new videos from a yt channel periodically',
 	packages=find_packages(),
 	install_requires=[
+		"argh",
 		"easycmd",
 	],
 )
