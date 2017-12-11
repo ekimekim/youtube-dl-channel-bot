@@ -1,0 +1,14 @@
+This program is designed to run periodically (eg. on crontab), and check for new videos
+on a list of youtube channels. Note it doesn't do this in a very efficient way right now,
+favoring simplicity and existing tooling over speed. It doesn't really matter
+since it runs in the background anyway.
+
+It maintains a config/state file in ~/.youtube-dl-channel-bot.conf with the following syntax:
+	[ LAST_CHECKED <tab> ] CHANNEL_URL <tab> PATH
+LAST_CHECKED is intended to be added by the bot, and is a timestamp in epoch time.
+CHANNEL_URL is the channel to be checked for videos.
+PATH is where to put the downloaded files, and must be absolute.
+
+In addition, you can specify an action to take after files have been downloaded.
+After each invocation, the file ~/.youtube-dl-channel-bot.hook (if it exists and is executable)
+is called, and the new files specified as absolute paths on stdin, newline-seperated.
