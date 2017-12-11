@@ -61,7 +61,7 @@ def main(*youtube_dl_args, **kwargs):
 			new_files += check_channel(url, path, timestamp, youtube_dl_args, filename_template)
 		logging.info("Got {} new files".format(len(new_files)))
 		update_conf(conf, update_times)
-		if os.access(hook, os.X_OK):
+		if os.access(hook, os.X_OK) and new_files:
 			logging.info("Calling hook {!r}".format(hook))
 			cmd([hook], stdin='\n'.join(new_files)+'\n')
 		else:
@@ -114,11 +114,12 @@ def update_conf(path, update_times):
 		if isinstance(item, basestring):
 			new_conf.append(item)
 			continue
-		url, path, old_ts = item
-		new_ts = update_times.get((url, path), old_ts)
-		new_conf.append('\t'.join(str(int(new_ts)), url, path))
+		url, item_path, old_ts = item
+		new_ts = update_times.get((url, item_path), old_ts)
+		new_conf.append('\t'.join([str(int(new_ts)), url, item_path]))
 	# note we use a temp path so we can use os.rename for atomic switch (no partial writes on crash)
 	tmp_path = "{}.tmp".format(path)
+	logging.debug("writing new config to {!r}".format(tmp_path))
 	with open(tmp_path, 'w') as f:
 		f.write('\n'.join(new_conf) + '\n')
 	os.rename(tmp_path, path)
@@ -144,8 +145,13 @@ def check_channel(url, path, timestamp, youtube_dl_args, filename_template):
 		# we only want to report new files if they weren't already downloaded
 		# (this can happen in a few edge cases)
 		new_files = set(os.listdir(tempdir)) - set(os.listdir(path))
+		ret = []
 		for name in new_files:
-			os.rename(os.path.join(tempdir, name), os.path.join(path, name))
+			new_path = os.path.join(path, name)
+			logging.info("Saving new file {!r}".format(new_path))
+			os.rename(os.path.join(tempdir, name), new_path)
+			ret.append(new_path)
+		return ret
 	finally:
 		# attempt to clean up tempdir as much as we can
 		for name in os.listdir(tempdir):
