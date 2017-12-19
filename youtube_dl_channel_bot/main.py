@@ -139,7 +139,8 @@ def check_channel(url, path, timestamp, youtube_dl_args, filename_template):
 	try:
 		output_template = '{}/{}'.format(tempdir, filename_template)
 		cmd(
-			['youtube-dl'] + list(youtube_dl_args) + time_args + ['-o', output_template, '--', url],
+			['youtube-dl', '--ignore-errors'] + list(youtube_dl_args) + time_args
+			+ ['-o', output_template, '--', url],
 			stdout=sys.stdout,
 		)
 		# we only want to report new files if they weren't already downloaded
