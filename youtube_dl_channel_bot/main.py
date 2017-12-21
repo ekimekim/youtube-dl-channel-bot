@@ -138,10 +138,13 @@ def check_channel(url, path, timestamp, youtube_dl_args, filename_template):
 	tempdir = tempfile.mkdtemp(prefix='youtube-dl-channel-bot-', suffix='.tmp.d', dir=path)
 	try:
 		output_template = '{}/{}'.format(tempdir, filename_template)
+		# Unfortunately, youtube-dl will exit 1 if there are any copyright-blocked videos,
+		# even with --ignore-errors. We allow 1 as a success exit code.
 		cmd(
 			['youtube-dl', '--ignore-errors'] + list(youtube_dl_args) + time_args
 			+ ['-o', output_template, '--', url],
 			stdout=sys.stdout,
+			success=[0,1],
 		)
 		# we only want to report new files if they weren't already downloaded
 		# (this can happen in a few edge cases)
