@@ -47,7 +47,7 @@ def main(*youtube_dl_args, **kwargs):
 		kwargs[k] for k in ('log', 'conf', 'hook', 'lock', 'filename_template')
 	]
 	conf, hook, lock = [os.path.expanduser(s) for s in (conf, hook, lock)]
-	logging.basicConfig(level=log.upper())
+	logging.basicConfig(level=log.upper(), format='%(levelname)s:%(asctime)s:%(process)d:%(name)s:%(message)s')
 	logging.info("Executing with youtube-dl args: {!r}".format(youtube_dl_args))
 	with FLock(lock):
 		logging.info("Acquired lock {!r}".format(lock))
