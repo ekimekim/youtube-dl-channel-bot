@@ -61,11 +61,12 @@ def main(*youtube_dl_args, **kwargs):
 			new_files += check_channel(url, path, timestamp, youtube_dl_args, filename_template)
 		logging.info("Got {} new files".format(len(new_files)))
 		update_conf(conf, update_times)
-		if os.access(hook, os.X_OK) and new_files:
-			logging.info("Calling hook {!r}".format(hook))
-			cmd([hook], stdin='\n'.join(new_files)+'\n')
-		else:
-			logging.info("Hook {!r} does not exist or is not executable".format(hook))
+		if new_files:
+			if os.access(hook, os.X_OK):
+				logging.info("Calling hook {!r}".format(hook))
+				cmd([hook], stdin='\n'.join(new_files)+'\n')
+			else:
+				logging.info("Hook {!r} does not exist or is not executable".format(hook))
 		logging.info("Ran successfully")
 
 
