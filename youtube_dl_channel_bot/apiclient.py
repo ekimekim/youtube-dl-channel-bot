@@ -1,4 +1,5 @@
 
+import logging
 import time
 
 import gevent
@@ -62,5 +63,7 @@ class GoogleAPIClient(object):
 			headers=dict(Authorization='Bearer {}'.format(self.access_token)),
 			params=params,
 		)
-		resp.raise_for_status()
+		if not resp.ok:
+			logging.error("Failed request has content:\n{}".format(resp.content))
+			resp.raise_for_status()
 		return resp.json()
