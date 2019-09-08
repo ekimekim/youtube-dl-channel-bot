@@ -60,24 +60,25 @@ def main(*youtube_dl_args, **kwargs):
 	with FLock(lock):
 		logging.info("Acquired lock {!r}".format(lock))
 		channels = parse_conf(conf)
+		# Do least recently checked first, in case we hit our api quota before finishing.
+		channels.sort(key=lambda (u,p,t): 0 if t is None else t)
 		logging.info("Got config for {} channels".format(len(channels)))
 		with open(creds) as f:
 			creds = json.load(f)
 		client = GoogleAPIClient(base_url='https://www.googleapis.com/youtube/v3', **creds)
-		new_files = []
-		update_times = {}
 		for url, path, timestamp in channels:
-			update_times[url, path] = time.time()
+			start_time = time.time()
 			logging.info("Checking for new videos from {!r} after {!r}".format(url, timestamp))
-			new_files += check_url(client, url, path, timestamp, youtube_dl_args, filename_template)
-		logging.info("Got {} new files".format(len(new_files)))
-		update_conf(conf, update_times)
-		if new_files:
-			if os.access(hook, os.X_OK):
-				logging.info("Calling hook {!r}".format(hook))
-				cmd([hook], stdin='\n'.join(new_files)+'\n')
-			else:
-				logging.info("Hook {!r} does not exist or is not executable".format(hook))
+			new_files = check_url(client, url, path, timestamp, youtube_dl_args, filename_template)
+			update_conf(conf, {(url, path): start_time})
+			logging.info("Got {} new files".format(len(new_files)))
+			if new_files:
+				if os.access(hook, os.X_OK):
+					logging.info("Calling hook {!r}".format(hook))
+					cmd([hook], stdin='\n'.join(new_files)+'\n')
+				else:
+					logging.info("Hook {!r} does not exist or is not executable".format(hook))
+			logging.info("Ran for entry {}".format(url))
 		logging.info("Ran successfully")
 
 
