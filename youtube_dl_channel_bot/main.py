@@ -1,13 +1,18 @@
 
+import datetime
 import fcntl
+import json
 import logging
 import os
 import sys
 import tempfile
 import time
+import urlparse
 
 import argh
 from easycmd import cmd
+
+from .apiclient import GoogleAPIClient
 
 
 class FLock(object):
@@ -33,6 +38,8 @@ class FLock(object):
 	def unlock(self):
 		# note we delete then close, otherwise someone else could take the lock before we delete,
 		# then a third party could take the lock again without the second party having released it.
+		# actually that can still happen, if A opens, then B deletes, then B releases, then A acquires.
+		# locking is hard.
 		os.remove(self.path)
 		self.file.close()
 
@@ -41,24 +48,28 @@ class FLock(object):
 @argh.arg('--conf', default='~/.youtube-dl-channel-bot.conf')
 @argh.arg('--hook', default='~/.youtube-dl-channel-bot.hook')
 @argh.arg('--lock', default='~/.youtube-dl-channel-bot.lock')
+@argh.arg('--creds', default='~/.youtube-dl-channel-bot.creds')
 @argh.arg('--filename-template', default='%(title)s-%(id)s.%(ext)s')
 def main(*youtube_dl_args, **kwargs):
-	log, conf, hook, lock, filename_template = [
-		kwargs[k] for k in ('log', 'conf', 'hook', 'lock', 'filename_template')
+	log, conf, hook, lock, creds, filename_template = [
+		kwargs[k] for k in ('log', 'conf', 'hook', 'lock', 'creds', 'filename_template')
 	]
-	conf, hook, lock = [os.path.expanduser(s) for s in (conf, hook, lock)]
+	conf, hook, lock, creds = [os.path.expanduser(s) for s in (conf, hook, lock, creds)]
 	logging.basicConfig(level=log.upper(), format='%(levelname)s:%(asctime)s:%(process)d:%(name)s:%(message)s')
 	logging.info("Executing with youtube-dl args: {!r}".format(youtube_dl_args))
 	with FLock(lock):
 		logging.info("Acquired lock {!r}".format(lock))
 		channels = parse_conf(conf)
 		logging.info("Got config for {} channels".format(len(channels)))
+		with open(creds) as f:
+			creds = json.load(f)
+		client = GoogleAPIClient(base_url='https://www.googleapis.com/youtube/v3', **creds)
 		new_files = []
 		update_times = {}
 		for url, path, timestamp in channels:
 			update_times[url, path] = time.time()
 			logging.info("Checking for new videos from {!r} after {!r}".format(url, timestamp))
-			new_files += check_channel(url, path, timestamp, youtube_dl_args, filename_template)
+			new_files += check_url(client, url, path, timestamp, youtube_dl_args, filename_template)
 		logging.info("Got {} new files".format(len(new_files)))
 		update_conf(conf, update_times)
 		if new_files:
@@ -126,32 +137,91 @@ def update_conf(path, update_times):
 	os.rename(tmp_path, path)
 
 
-def check_channel(url, path, timestamp, youtube_dl_args, filename_template):
-	"""For given channel url, checks for videos posted since timestamp, and if so downloads them to
+def check_url(youtube_client, url, path, timestamp, youtube_dl_args, filename_template):
+	"""For given playlist, user or channel url,
+	checks for videos posted since timestamp, and if so downloads them to
 	given path. Adds any given youtube-dl args as extra args. Returns a list of new files."""
+
+	parsed = urlparse.urlparse(url)
+	query = urlparse.parse_qs(parsed.query)
+	if parsed.path.startswith('/playlist'):
+		playlist = query['list']
+		logging.info("Interpreted url {} as playlist {}".format(url, playlist))
+	else:
+		if parsed.path.startswith('/user'):
+			user = parsed.path.split('/')[2]
+			params = {'forUsername': user}
+		elif parsed.path.startswith('/channel'):
+			channel = parsed.path.split('/')[2]
+			params = {'id': channel}
+		else:
+			raise ValueError("Unrecognised url {!r}".format(url))
+		result = youtube_client.request('GET', 'channels', part='contentDetails', **params)
+		if not result['items']:
+			raise ValueError("No channel found for {}".format(params))
+		if len(result['items']) > 1:
+			raise ValueError("Multiple channels found for {}: {}".format(params, result['items']))
+		item = result['items'][0]
+		playlist = item['contentDetails']['relatedPlaylists']['uploads']
+		logging.info("Interpreted url {} as {}, got uploads playlist {}".format(url, params, playlist))
+
+	logging.info("Looking for new videos in playlist {} since {}".format(playlist, timestamp))
+
+	# download list of items in playlist
+	items = []
+	token = None
+	while True:
+		result = youtube_client.request('GET', 'playlistItems',
+			playlistId=playlist, part='snippet',
+			**({'pageToken': token} if token is not None else {})
+		)
+		items += result['items']
+		if 'nextPageToken' not in result:
+			break
+		token = result['nextPageToken']
+
+	logging.info("Found {} videos in playlist".format(len(items)))
+
+	# filter items for publish date
+	latest_items = []
+	for item in items:
+		published = datetime.datetime.strptime(item['snippet']['publishedAt'], "%Y-%m-%dT%H:%M:%S.%fZ")
+		if timestamp is None or published >= datetime.datetime.utcfromtimestamp(timestamp):
+			latest_items.append(item['snippet']['resourceId']['videoId'])
+
+	logging.info("Found videos since timestamp: {}".format(latest_items))
+
+	exists = os.listdir(path)
+	to_download = []
+	for id in latest_items:
+		# ignore ones that already exist
+		matches = [name for name in exists if "-{}.".format(id) in name]
+		if matches:
+			logging.info("Ignoring video {}: already exists as {}".format(id, matches))
+			continue
+		to_download.append(id)
+
+	if not to_download:
+		return []
+
+	logging.info("Downloading videos: {}".format(to_download))
+
 	# In order to get a list of downloaded files, we resort to a hack:
 	# we download to a temp dir first, then rename.
-	if timestamp is None:
-		time_args = []
-	else:
-		timestr = time.strftime('%Y%m%d', time.gmtime(timestamp))
-		time_args = ['--dateafter', timestr]
+	# This also protects us from partial downloads.
 	tempdir = tempfile.mkdtemp(prefix='youtube-dl-channel-bot-', suffix='.tmp.d', dir=path)
 	try:
 		output_template = '{}/{}'.format(tempdir, filename_template)
 		# Unfortunately, youtube-dl will exit 1 if there are any copyright-blocked videos,
 		# even with --ignore-errors. We allow 1 as a success exit code.
 		cmd(
-			['youtube-dl', '--ignore-errors'] + list(youtube_dl_args) + time_args
-			+ ['-o', output_template, '--', url],
+			['youtube-dl', '--ignore-errors'] + list(youtube_dl_args)
+			+ ['-o', output_template, '--'] + to_download,
 			stdout=sys.stdout,
 			success=[0,1],
 		)
-		# we only want to report new files if they weren't already downloaded
-		# (this can happen in a few edge cases)
-		new_files = set(os.listdir(tempdir)) - set(os.listdir(path))
 		ret = []
-		for name in new_files:
+		for name in os.listdir(tempdir):
 			new_path = os.path.join(path, name)
 			logging.info("Saving new file {!r}".format(new_path))
 			os.rename(os.path.join(tempdir, name), new_path)
