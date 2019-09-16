@@ -129,7 +129,10 @@ def update_conf(path, update_times):
 			continue
 		url, item_path, old_ts = item
 		new_ts = update_times.get((url, item_path), old_ts)
-		new_conf.append('\t'.join([str(int(new_ts)), url, item_path]))
+		if new_ts is None:
+			new_conf.append('\t'.join([url, item_path]))
+		else:
+			new_conf.append('\t'.join([str(int(new_ts)), url, item_path]))
 	# note we use a temp path so we can use os.rename for atomic switch (no partial writes on crash)
 	tmp_path = "{}.tmp".format(path)
 	logging.debug("writing new config to {!r}".format(tmp_path))
