@@ -1,5 +1,6 @@
 
 import datetime
+import errno
 import fcntl
 import json
 import logging
@@ -194,6 +195,12 @@ def check_url(youtube_client, url, path, timestamp, youtube_dl_args, filename_te
 			latest_items.append(item['snippet']['resourceId']['videoId'])
 
 	logging.info("Found videos since timestamp: {}".format(latest_items))
+
+	try:
+		os.makedirs(path)
+	except OSError as e:
+		if e.errno != errno.EEXIST:
+			raise
 
 	exists = os.listdir(path)
 	to_download = []
