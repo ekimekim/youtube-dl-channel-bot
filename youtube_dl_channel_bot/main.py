@@ -1,5 +1,4 @@
 
-import datetime
 import errno
 import fcntl
 import json
@@ -69,8 +68,8 @@ def main(*youtube_dl_args, **kwargs):
 		client = GoogleAPIClient(base_url='https://www.googleapis.com/youtube/v3', **creds)
 		for url, path, timestamp in channels:
 			start_time = time.time()
-			logging.info("Checking for new videos from {!r} after {!r}".format(url, timestamp))
-			new_files = check_url(client, url, path, timestamp, youtube_dl_args, filename_template)
+			logging.info("Checking for new videos from {!r}".format(url))
+			new_files = check_url(client, url, path, youtube_dl_args, filename_template)
 			update_conf(conf, {(url, path): start_time})
 			logging.info("Got {} new files".format(len(new_files)))
 			if new_files:
@@ -142,9 +141,9 @@ def update_conf(path, update_times):
 	os.rename(tmp_path, path)
 
 
-def check_url(youtube_client, url, path, timestamp, youtube_dl_args, filename_template):
+def check_url(youtube_client, url, path, youtube_dl_args, filename_template):
 	"""For given playlist, user or channel url,
-	checks for videos posted since timestamp, and if so downloads them to
+	checks for videos that don't already exist, and if so downloads them to
 	given path. Adds any given youtube-dl args as extra args. Returns a list of new files."""
 
 	parsed = urlparse.urlparse(url)
@@ -170,7 +169,7 @@ def check_url(youtube_client, url, path, timestamp, youtube_dl_args, filename_te
 		playlist = item['contentDetails']['relatedPlaylists']['uploads']
 		logging.info("Interpreted url {} as {}, got uploads playlist {}".format(url, params, playlist))
 
-	logging.info("Looking for new videos in playlist {} since {}".format(playlist, timestamp))
+	logging.info("Looking for new videos in playlist {}".format(playlist))
 
 	# download list of items in playlist
 	items = []
@@ -187,14 +186,7 @@ def check_url(youtube_client, url, path, timestamp, youtube_dl_args, filename_te
 
 	logging.info("Found {} videos in playlist".format(len(items)))
 
-	# filter items for publish date
-	latest_items = []
-	for item in items:
-		published = datetime.datetime.strptime(item['snippet']['publishedAt'], "%Y-%m-%dT%H:%M:%S.%fZ")
-		if timestamp is None or published >= datetime.datetime.utcfromtimestamp(timestamp):
-			latest_items.append(item['snippet']['resourceId']['videoId'])
-
-	logging.info("Found videos since timestamp: {}".format(latest_items))
+	items = [item['snippet']['resourceId']['videoId'] for item in items]
 
 	try:
 		os.makedirs(path)
@@ -204,11 +196,11 @@ def check_url(youtube_client, url, path, timestamp, youtube_dl_args, filename_te
 
 	exists = os.listdir(path)
 	to_download = []
-	for id in latest_items:
+	for id in items:
 		# ignore ones that already exist
 		matches = [name for name in exists if "-{}.".format(id) in name]
 		if matches:
-			logging.info("Ignoring video {}: already exists as {}".format(id, matches))
+			logging.debug("Ignoring video {}: already exists as {}".format(id, matches))
 			continue
 		to_download.append(id)
 
