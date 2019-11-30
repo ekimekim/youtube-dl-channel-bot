@@ -66,11 +66,14 @@ def main(*youtube_dl_args, **kwargs):
 		with open(creds) as f:
 			creds = json.load(f)
 		client = GoogleAPIClient(base_url='https://www.googleapis.com/youtube/v3', **creds)
-		for url, path, timestamp in channels:
+		for url, original_path, timestamp in channels:
+			path = os.path.abspath(original_path)
+			if path != original_path:
+				logging.warning("Corrected relative path {!r} -> {!r}".format(original_path, path))
 			start_time = time.time()
 			logging.info("Checking for new videos from {!r}".format(url))
 			new_files = check_url(client, url, path, youtube_dl_args, filename_template)
-			update_conf(conf, {(url, path): start_time})
+			update_conf(conf, {(url, original_path): start_time})
 			logging.info("Got {} new files".format(len(new_files)))
 			if new_files:
 				if os.access(hook, os.X_OK):
